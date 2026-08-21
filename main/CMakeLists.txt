@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "main.c"
         "wifi.c"
+        "blynk.c"
 
     INCLUDE_DIRS
         "."
@@ -11,4 +12,7 @@ idf_component_register(
         esp_event
         esp_netif
         nvs_flash
+        esp_http_client
+        esp-tls
+        mbedtls
 )

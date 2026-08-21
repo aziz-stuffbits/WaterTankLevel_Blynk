@@ -1,7 +1,11 @@
 #include <stdio.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "nvs_flash.h"
 
+#include "blynk.h"
 #include "wifi.h"
 
 
@@ -32,4 +36,20 @@ void app_main(void)
     printf(
         "Wi-Fi Connected Successfully!\n"
     );
+
+    int tank_level = 10;
+
+    while (1)
+    {
+        blynk_send_tank_level(tank_level);
+
+        tank_level += 10;
+
+        if (tank_level > 100)
+        {
+            tank_level = 10;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
 }
