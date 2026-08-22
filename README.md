@@ -583,3 +583,315 @@ ESP32 -> Wi-Fi -> HTTPS -> Blynk V0 -> Mobile Gauge
 ```
 
 with approximately 5 seconds between updates.
+
+---
+
+# Latest Progress Update — Arduino Tank Node
+
+## Roof-Side Acquisition Architecture
+
+The project now uses a dedicated Arduino UNO at the overhead tank for local acquisition.
+
+```text
+ROOFTOP / TANK
+
+HC-SR04 / JSN-SR04T
+        |
+        v
+   Arduino UNO
+        |
+        | RS485 / Modbus RTU
+        v
+      MAX485
+        |
+        | CAT5/CAT6 long cable
+        | +12V / GND / RS485 A / RS485 B
+        v
+
+INSIDE HOUSE
+
+      MAX3485
+        |
+        v
+   ESP32-WROOM
+        |
+        | Wi-Fi
+        v
+    Blynk Cloud
+        |
+        v
+    Mobile App
+```
+
+The ESP32 remains inside the house where Wi-Fi coverage is reliable. The Arduino UNO stays close to the ultrasonic sensor so the sensor wiring remains short.
+
+## Arduino UNO Development Environment
+
+Arduino IDE is not being used.
+
+The Arduino UNO firmware is developed in Cursor using PlatformIO Core CLI.
+
+PlatformIO is installed in:
+
+```text
+~/.platformio-venv
+```
+
+Activate it with:
+
+```bash
+source ~/.platformio-venv/bin/activate
+```
+
+Useful commands:
+
+```bash
+pio --version
+pio run
+pio run -t upload
+pio device monitor
+```
+
+The Arduino UNO is detected as:
+
+```text
+/dev/ttyACM0
+```
+
+Current project:
+
+```text
+Arduino_Tank_Node/
+├── platformio.ini
+├── include/
+├── lib/
+├── src/
+│   └── main.cpp
+└── test/
+```
+
+Current `platformio.ini`:
+
+```ini
+[env:uno]
+platform = atmelavr
+board = uno
+framework = arduino
+monitor_speed = 115200
+```
+
+## Arduino Milestone A — Basic Firmware
+
+COMPLETED.
+
+Verified serial output:
+
+```text
+Arduino Tank Node Starting
+Tank Node Alive
+```
+
+This proves Cursor -> PlatformIO -> Arduino UNO build/upload/serial monitoring.
+
+## Arduino Milestone B — Ultrasonic Distance Measurement
+
+COMPLETED.
+
+Current HC-SR04 wiring:
+
+```text
+HC-SR04        Arduino UNO
+-------        -----------
+VCC    ------> 5V
+GND    ------> GND
+TRIG   ------> D8
+ECHO   ------> D9
+```
+
+Because the UNO uses 5V logic, no resistor divider is required on ECHO.
+
+Measurement formula:
+
+```text
+distance_cm = (echo_time_us * 0.0343) / 2
+```
+
+The readings have been tested and are precise/stable.
+
+Typical output:
+
+```text
+Distance: 42.7 cm
+Distance: 42.6 cm
+Distance: 42.8 cm
+```
+
+# Power and Cabling Plan
+
+## Rooftop Power
+
+Planned supply:
+
+```text
+12V from downstairs
+        |
+        | CAT5/CAT6
+        v
+Arduino UNO barrel jack
+        |
+        +---- 5V rail -> Ultrasonic sensor
+        |
+        +---- 5V rail -> MAX485
+```
+
+Do not feed 24V directly to the UNO barrel jack.
+
+A local buck converter may later be preferred for the permanent installation to reduce heat.
+
+## CAT5 / CAT6 Cable Usage
+
+The long cable between the house and rooftop will carry:
+
+```text
++12V
+GND
+RS485 A
+RS485 B
+```
+
+Recommended:
+- one twisted pair for RS485 A/B
+- parallel conductors for +12V if useful
+- parallel conductors for GND if useful
+- keep remaining conductors as spare
+
+Keep ultrasonic sensor wiring local to the Arduino UNO.
+
+Do not extend the JSN-SR04T probe cable over the two-floor run. Use RS485 for the long-distance link instead.
+
+# Next Development Milestone
+
+Before Modbus, convert ultrasonic distance into useful tank information on the Arduino UNO:
+
+```text
+Distance to water
+Water height
+Tank level %
+Approximate litres
+Sensor status
+```
+
+Recommended serial output:
+
+```text
+Distance: 40.2 cm
+Water Height: 109.8 cm
+Level: 73 %
+Volume: 730 L
+Sensor: OK
+```
+
+Basic calculation:
+
+```text
+water_height = usable_tank_height - measured_distance
+
+tank_percentage =
+    (water_height / usable_tank_height) * 100
+```
+
+Clamp the final percentage to:
+
+```text
+0 ... 100 %
+```
+
+For a normal vertical cylindrical household tank, water-height percentage is approximately equal to volume percentage.
+
+If tank capacity is known:
+
+```text
+volume_litres =
+    tank_percentage * tank_capacity_litres / 100
+```
+
+# Planned Modbus RTU Interface
+
+After tank calculations are verified:
+
+```text
+Arduino UNO
+    |
+    v
+MAX485
+    |
+    | Modbus RTU
+    v
+MAX3485
+    |
+    v
+ESP32
+```
+
+Arduino UNO: Modbus RTU Slave  
+ESP32: Modbus RTU Master
+
+Suggested register map:
+
+| Register | Parameter | Unit |
+|---|---|---|
+| 40001 | Distance | mm |
+| 40002 | Tank Level | % |
+| 40003 | Water Volume | L |
+| 40004 | Sensor Status | enum / flags |
+| 40005 | Reserved / optional temperature | TBD |
+
+Example:
+
+```text
+40001 = 402
+40002 = 73
+40003 = 730
+40004 = 0
+```
+
+Suggested sensor status:
+
+```text
+0 = Sensor OK
+1 = Sensor timeout
+2 = Invalid measurement
+```
+
+The ESP32 will poll these registers and publish the relevant values to Blynk.
+
+# Updated Development Sequence
+
+```text
+ESP32 ESP-IDF bring-up                COMPLETE
+ESP32 Wi-Fi connection                COMPLETE
+Blynk V0 cloud API test               COMPLETE
+ESP32 -> Blynk HTTPS                  IN PROGRESS
+
+Arduino PlatformIO setup              COMPLETE
+Arduino serial output                 COMPLETE
+HC-SR04 distance measurement          COMPLETE
+
+Tank % / litres calculation           NEXT
+MAX485 + Modbus RTU Slave             AFTER THAT
+ESP32 Modbus RTU Master               AFTER THAT
+ESP32 -> Blynk real tank data         FINAL INTEGRATION
+```
+
+# Important Instructions for Any Cursor Agent
+
+1. Inspect both the ESP32 project and `Arduino_Tank_Node` before changing code.
+2. Preserve currently working code unless a change is required.
+3. Keep ESP32 on native ESP-IDF.
+4. Keep Arduino UNO on PlatformIO/Arduino framework.
+5. Arduino UNO responsibilities: ultrasonic acquisition, tank calculation, Modbus RTU slave.
+6. ESP32 responsibilities: Modbus RTU master, Wi-Fi, Blynk HTTPS/cloud communication.
+7. Keep ultrasonic wiring short and local to the Arduino.
+8. Use RS485 for the long two-floor cable run.
+9. Do not commit real Wi-Fi or Blynk credentials.
+10. Build and verify each milestone independently before integration.
