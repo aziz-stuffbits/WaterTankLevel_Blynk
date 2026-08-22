@@ -9,8 +9,8 @@
 
 #include "nvs_flash.h"
 
-#define WIFI_SSID      "Aziz"
-#define WIFI_PASSWORD  "Mobile12"
+#define WIFI_SSID      "Airtel_Stuffbits_2026"
+#define WIFI_PASSWORD  "Stuffbits@2026"
 
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1

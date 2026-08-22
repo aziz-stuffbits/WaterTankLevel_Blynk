@@ -3,6 +3,7 @@ idf_component_register(
         "main.c"
         "wifi.c"
         "blynk.c"
+        "modbus_slave.c"
 
     INCLUDE_DIRS
         "."
@@ -15,4 +16,6 @@ idf_component_register(
         esp_http_client
         esp-tls
         mbedtls
+        driver
+        espressif__esp-modbus
 )
