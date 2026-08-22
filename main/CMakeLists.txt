@@ -3,7 +3,7 @@ idf_component_register(
         "main.c"
         "wifi.c"
         "blynk.c"
-        "modbus_slave.c"
+        "modbus_master.c"
 
     INCLUDE_DIRS
         "."

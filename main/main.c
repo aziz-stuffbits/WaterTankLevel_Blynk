@@ -1,17 +1,18 @@
 #include <stdio.h>
-#include <stdint.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "esp_log.h"
 #include "nvs_flash.h"
 
 #include "blynk.h"
-#include "modbus_slave.h"
+#include "modbus_master.h"
 #include "wifi.h"
 
-#define TANK_HEIGHT_MM_DEFAULT 1500
-#define TANK_CAPACITY_L_DEFAULT 1000
+#define BLYNK_SEND_PERIOD_MS 10000
+
+static const char *TAG = "APP";
 
 void app_main(void)
 {
@@ -41,37 +42,26 @@ void app_main(void)
         "Wi-Fi Connected Successfully!\n"
     );
 
-    ESP_ERROR_CHECK(modbus_slave_init());
-
-    int tank_level = 10;
+    ESP_ERROR_CHECK(modbus_master_init());
 
     while (1)
     {
-        uint16_t water_mm =
-            (uint16_t)(((uint32_t)tank_level *
-                        TANK_HEIGHT_MM_DEFAULT) / 100);
-        uint16_t distance_mm =
-            TANK_HEIGHT_MM_DEFAULT - water_mm;
-        uint16_t volume_l =
-            (uint16_t)(((uint32_t)tank_level *
-                        TANK_CAPACITY_L_DEFAULT) / 100);
+        uint16_t level_pct = 0;
 
-        modbus_slave_set_tank(
-            distance_mm,
-            (uint16_t)tank_level,
-            volume_l,
-            0
-        );
-
-        // blynk_send_tank_level(tank_level);
-
-        tank_level += 10;
-
-        if (tank_level > 100)
+        if (modbus_master_get_tank(NULL, &level_pct, NULL, NULL))
         {
-            tank_level = 10;
+            if (level_pct > 100)
+            {
+                level_pct = 100;
+            }
+
+            blynk_send_tank_level((int)level_pct);
+        }
+        else
+        {
+            ESP_LOGW(TAG, "No UNO reading yet, skip Blynk");
         }
 
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        vTaskDelay(pdMS_TO_TICKS(BLYNK_SEND_PERIOD_MS));
     }
 }
