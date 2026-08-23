@@ -26,34 +26,83 @@
 #define TANK_HEIGHT_MM_DEFAULT 1500
 #define TANK_CAPACITY_L_DEFAULT 1000
 
-#define MEASURE_INTERVAL_MS 1000
+#define MEASURE_INTERVAL_MS 200
 #define ECHO_TIMEOUT_US 20000
 #define DISTANCE_MM_MIN 20
 #define DISTANCE_MM_MAX 4000
+#define AVG_SAMPLES 5
+/* Water cannot rise/fall this far in 200 ms; treat as splash / false echo. */
+#define MAX_STEP_MM 50
+#define BAD_STREAK_REPORT 10
 
 ModbusRTU mb;
 
 static uint16_t last_distance_mm = 0;
 static bool have_last_good = false;
 static unsigned long last_measure_ms = 0;
+static uint16_t avg_buf[AVG_SAMPLES];
+static uint8_t avg_count = 0;
+static uint8_t avg_index = 0;
+static uint8_t bad_streak = 0;
 
-static void update_tank_registers(uint16_t distance_mm, uint16_t status)
+static uint16_t push_moving_average(uint16_t distance_mm)
+{
+    avg_buf[avg_index] = distance_mm;
+    avg_index = (uint8_t)((avg_index + 1) % AVG_SAMPLES);
+    if (avg_count < AVG_SAMPLES)
+    {
+        avg_count++;
+    }
+
+    uint32_t sum = 0;
+    for (uint8_t i = 0; i < avg_count; i++)
+    {
+        sum += avg_buf[i];
+    }
+    return (uint16_t)(sum / avg_count);
+}
+
+static bool is_false_reading(uint16_t distance_mm)
+{
+    if (!have_last_good)
+    {
+        return false;
+    }
+
+    int32_t delta = (int32_t)distance_mm - (int32_t)last_distance_mm;
+    if (delta < 0)
+    {
+        delta = -delta;
+    }
+    return delta > (int32_t)MAX_STEP_MM;
+}
+
+static uint16_t tank_height_mm(void)
 {
     uint16_t height_mm = mb.Hreg(REG_TANK_HEIGHT_MM);
-    uint16_t capacity_l = mb.Hreg(REG_TANK_CAPACITY_L);
-
     if (height_mm == 0)
     {
         height_mm = TANK_HEIGHT_MM_DEFAULT;
         mb.Hreg(REG_TANK_HEIGHT_MM, height_mm);
     }
+    return height_mm;
+}
 
+static uint16_t tank_capacity_l(void)
+{
+    uint16_t capacity_l = mb.Hreg(REG_TANK_CAPACITY_L);
     if (capacity_l == 0)
     {
         capacity_l = TANK_CAPACITY_L_DEFAULT;
         mb.Hreg(REG_TANK_CAPACITY_L, capacity_l);
     }
+    return capacity_l;
+}
 
+static void update_tank_registers(uint16_t distance_mm, uint16_t status)
+{
+    uint16_t height_mm = tank_height_mm();
+    uint16_t capacity_l = tank_capacity_l();
     uint16_t water_mm = 0;
     uint16_t level_pct = 0;
     uint16_t volume_l = 0;
@@ -89,6 +138,22 @@ static void update_tank_registers(uint16_t distance_mm, uint16_t status)
     mb.Hreg(REG_RESERVED, 0);
 }
 
+static void reject_reading(uint16_t status)
+{
+    digitalWrite(STATUS_LED_PIN, LOW);
+    if (bad_streak < 255)
+    {
+        bad_streak++;
+    }
+
+    if (have_last_good && (bad_streak < BAD_STREAK_REPORT))
+    {
+        return;
+    }
+
+    update_tank_registers(last_distance_mm, status);
+}
+
 static void measure_and_publish(void)
 {
     digitalWrite(TRIG_PIN, LOW);
@@ -101,8 +166,7 @@ static void measure_and_publish(void)
 
     if (echo_us == 0)
     {
-        digitalWrite(STATUS_LED_PIN, LOW);
-        update_tank_registers(last_distance_mm, STATUS_TIMEOUT);
+        reject_reading(STATUS_TIMEOUT);
         return;
     }
 
@@ -112,13 +176,19 @@ static void measure_and_publish(void)
     if ((distance_mm < DISTANCE_MM_MIN) ||
         (distance_mm > DISTANCE_MM_MAX))
     {
-        digitalWrite(STATUS_LED_PIN, LOW);
-        update_tank_registers(last_distance_mm, STATUS_INVALID);
+        reject_reading(STATUS_INVALID);
         return;
     }
 
-    last_distance_mm = (uint16_t)distance_mm;
+    if (is_false_reading((uint16_t)distance_mm))
+    {
+        reject_reading(STATUS_INVALID);
+        return;
+    }
+
+    last_distance_mm = push_moving_average((uint16_t)distance_mm);
     have_last_good = true;
+    bad_streak = 0;
     digitalWrite(STATUS_LED_PIN, HIGH);
     update_tank_registers(last_distance_mm, STATUS_OK);
 }
