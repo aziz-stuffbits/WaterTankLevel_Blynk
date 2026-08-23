@@ -9,8 +9,8 @@
 
 #include "nvs_flash.h"
 
-#define WIFI_SSID      "Airtel_Stuffbits_2026"
-#define WIFI_PASSWORD  "Stuffbits@2026"
+#define WIFI_SSID      "Aziz"
+#define WIFI_PASSWORD  "Mobile12"
 
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
@@ -18,9 +18,15 @@
 static const char *TAG = "WIFI";
 
 static EventGroupHandle_t s_wifi_event_group;
+static volatile bool s_wifi_connected = false;
 
 static int s_retry_num = 0;
 #define MAXIMUM_RETRY 10
+
+bool wifi_is_connected(void)
+{
+    return s_wifi_connected;
+}
 
 
 static void event_handler(void *arg,
@@ -37,6 +43,12 @@ static void event_handler(void *arg,
     else if (event_base == WIFI_EVENT &&
              event_id == WIFI_EVENT_STA_DISCONNECTED)
     {
+        s_wifi_connected = false;
+        xEventGroupClearBits(
+            s_wifi_event_group,
+            WIFI_CONNECTED_BIT
+        );
+
         if (s_retry_num < MAXIMUM_RETRY)
         {
             esp_wifi_connect();
@@ -51,6 +63,9 @@ static void event_handler(void *arg,
                 s_wifi_event_group,
                 WIFI_FAIL_BIT
             );
+            /* Keep trying after the first-connect wait ends. */
+            s_retry_num = 0;
+            esp_wifi_connect();
         }
     }
 
@@ -65,6 +80,7 @@ static void event_handler(void *arg,
                  IP2STR(&event->ip_info.ip));
 
         s_retry_num = 0;
+        s_wifi_connected = true;
 
         xEventGroupSetBits(
             s_wifi_event_group,

@@ -4,6 +4,8 @@ idf_component_register(
         "wifi.c"
         "blynk.c"
         "modbus_master.c"
+        "tank.c"
+        "status_led.c"
 
     INCLUDE_DIRS
         "."

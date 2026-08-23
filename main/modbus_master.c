@@ -59,6 +59,11 @@ bool modbus_master_get_tank(uint16_t *distance_mm,
     return true;
 }
 
+bool modbus_master_link_ok(void)
+{
+    return last_ok;
+}
+
 static esp_err_t poll_uno(void)
 {
     uint16_t regs[REG_COUNT] = { 0 };
