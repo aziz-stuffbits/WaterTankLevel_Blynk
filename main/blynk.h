@@ -5,17 +5,12 @@
 
 #include "esp_err.h"
 
-#define BLYNK_ERR_OK 0
-#define BLYNK_ERR_UNO_LOST 1
-#define BLYNK_ERR_SENSOR 2
-
 #define BLYNK_V7_NONE 0
 #define BLYNK_V7_LOW_WATER 1
 #define BLYNK_V7_FULL_TANK 2
 
 /* MQTT topics use Datastream Name, not the pin. Must match the Blynk template. */
 #define BLYNK_DS_LEVEL "Tank Level"
-#define BLYNK_DS_STATUS "Tank Status"
 #define BLYNK_DS_VOLUME "Volume"
 #define BLYNK_DS_DISTANCE "Distance"
 #define BLYNK_DS_RSSI "Wi-Fi RSSI"
@@ -27,7 +22,6 @@ void blynk_init(void);
 bool blynk_mqtt_connected(void);
 
 esp_err_t blynk_send_status(int level,
-                            int error_code,
                             int volume_l,
                             int distance_mm,
                             int rssi,

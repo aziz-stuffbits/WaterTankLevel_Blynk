@@ -161,8 +161,8 @@ void app_main(void)
     int last_valid_level = 0;
     int last_valid_volume_l = 0;
     int last_valid_distance_mm = 0;
-    int last_sent_err = -1;
     TickType_t last_blynk_tick = 0;
+    bool blynk_have_sent = false;
     bool last_blynk_ok = true;
 
     while (1)
@@ -172,7 +172,6 @@ void app_main(void)
         uint16_t distance_mm = 0;
         uint16_t uno_status = 0;
         tank_reading_t tank = { 0 };
-        int err_code = BLYNK_ERR_UNO_LOST;
         bool tank_data_valid = false;
         int event_code = BLYNK_V7_NONE;
 
@@ -181,7 +180,6 @@ void app_main(void)
         {
             uno_ever_ok = true;
             tank_from_distance(distance_mm, &tank);
-            err_code = (uno_status == 0) ? BLYNK_ERR_OK : BLYNK_ERR_SENSOR;
             tank_data_valid = (uno_status == 0);
 
             ESP_LOGI(TAG,
@@ -206,16 +204,12 @@ void app_main(void)
 
         TickType_t now = xTaskGetTickCount();
         bool period_elapsed =
-            (last_blynk_tick == 0) ||
+            !blynk_have_sent ||
             ((now - last_blynk_tick) >= pdMS_TO_TICKS(BLYNK_UPDATE_PERIOD_MS));
-        bool err_changed = (err_code != last_sent_err);
-        bool want_send =
-            period_elapsed ||
-            err_changed ||
-            (event_code != BLYNK_V7_NONE);
         bool retry_ok = last_blynk_ok || period_elapsed;
+        bool first_reading_ready = blynk_have_sent || have_last_level;
 
-        if (wifi_up && want_send && retry_ok)
+        if (wifi_up && period_elapsed && retry_ok && first_reading_ready)
         {
             int rssi = wifi_get_rssi();
             uint32_t uptime_minutes =
@@ -229,10 +223,10 @@ void app_main(void)
 
             update_counter++;
             last_blynk_tick = now;
+            blynk_have_sent = true;
 
             if (blynk_send_status(
                     level_to_send,
-                    err_code,
                     volume_to_send,
                     distance_to_send,
                     rssi,
@@ -241,7 +235,6 @@ void app_main(void)
                     event_code) == ESP_OK)
             {
                 last_blynk_ok = true;
-                last_sent_err = err_code;
                 if (event_code == BLYNK_V7_LOW_WATER)
                 {
                     low_water_alarm_armed = false;
