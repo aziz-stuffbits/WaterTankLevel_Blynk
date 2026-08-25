@@ -5,6 +5,7 @@
 #include "freertos/task.h"
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 
 #include "blynk.h"
@@ -14,8 +15,14 @@
 #include "wifi.h"
 
 #define APP_TICK_MS 500
+#define BLYNK_UPDATE_PERIOD_MS 30000
+#define LOW_WATER_TRIGGER_PERCENT 20
+#define LOW_WATER_RESET_PERCENT 25
+#define FULL_TANK_TRIGGER_PERCENT 98
+#define FULL_TANK_RESET_PERCENT 90
 
 static const char *TAG = "APP";
+static uint32_t update_counter = 0;
 
 static void apply_status_led(bool wifi_up, bool uno_ever_ok, bool uno_ok)
 {
@@ -38,6 +45,78 @@ static void apply_status_led(bool wifi_up, bool uno_ever_ok, bool uno_ok)
     }
 
     status_led_set(STATUS_LED_SOLID);
+}
+
+static bool low_water_alarm_armed = true;
+static bool low_water_logged_active = false;
+static bool full_tank_alarm_armed = true;
+static bool full_tank_logged_active = false;
+
+static int process_tank_alarms(int tank_level)
+{
+    if ((tank_level < LOW_WATER_TRIGGER_PERCENT) &&
+        low_water_alarm_armed)
+    {
+        if (!low_water_logged_active)
+        {
+            ESP_LOGW(TAG, "LOW WATER: level=%d%%", tank_level);
+            low_water_logged_active = true;
+        }
+        return BLYNK_V7_LOW_WATER;
+    }
+
+    if ((tank_level < LOW_WATER_TRIGGER_PERCENT) &&
+        !low_water_alarm_armed)
+    {
+        if (!low_water_logged_active)
+        {
+            ESP_LOGI(TAG, "LOW WATER alarm already active");
+            low_water_logged_active = true;
+        }
+    }
+    else if ((tank_level > LOW_WATER_RESET_PERCENT) &&
+             !low_water_alarm_armed)
+    {
+        ESP_LOGI(TAG,
+                 "Tank recovered above %d%%, low-water alarm re-armed",
+                 LOW_WATER_RESET_PERCENT);
+        low_water_alarm_armed = true;
+        low_water_logged_active = false;
+    }
+
+    if ((tank_level >= FULL_TANK_TRIGGER_PERCENT) &&
+        full_tank_alarm_armed)
+    {
+        if (!full_tank_logged_active)
+        {
+            ESP_LOGW(TAG, "FULL TANK: level=%d%%", tank_level);
+            full_tank_logged_active = true;
+        }
+        return BLYNK_V7_FULL_TANK;
+    }
+
+    if ((tank_level >= FULL_TANK_TRIGGER_PERCENT) &&
+        !full_tank_alarm_armed)
+    {
+        if (!full_tank_logged_active)
+        {
+            ESP_LOGI(TAG, "FULL TANK alarm already active");
+            full_tank_logged_active = true;
+        }
+        return BLYNK_V7_NONE;
+    }
+
+    if ((tank_level < FULL_TANK_RESET_PERCENT) &&
+        !full_tank_alarm_armed)
+    {
+        ESP_LOGI(TAG,
+                 "Tank dropped below %d%%, full-tank alarm re-armed",
+                 FULL_TANK_RESET_PERCENT);
+        full_tank_alarm_armed = true;
+        full_tank_logged_active = false;
+    }
+
+    return BLYNK_V7_NONE;
 }
 
 void app_main(void)
@@ -73,12 +152,18 @@ void app_main(void)
         printf("Wi-Fi Connected Successfully!\n");
     }
 
+    blynk_init();
+
     ESP_ERROR_CHECK(modbus_master_init());
 
     bool uno_ever_ok = false;
     bool have_last_level = false;
-    int last_sent_level = -1;
+    int last_valid_level = 0;
+    int last_valid_volume_l = 0;
+    int last_valid_distance_mm = 0;
     int last_sent_err = -1;
+    TickType_t last_blynk_tick = 0;
+    bool last_blynk_ok = true;
 
     while (1)
     {
@@ -88,6 +173,8 @@ void app_main(void)
         uint16_t uno_status = 0;
         tank_reading_t tank = { 0 };
         int err_code = BLYNK_ERR_UNO_LOST;
+        bool tank_data_valid = false;
+        int event_code = BLYNK_V7_NONE;
 
         if (uno_ok &&
             modbus_master_get_tank(&distance_mm, NULL, NULL, &uno_status))
@@ -95,6 +182,7 @@ void app_main(void)
             uno_ever_ok = true;
             tank_from_distance(distance_mm, &tank);
             err_code = (uno_status == 0) ? BLYNK_ERR_OK : BLYNK_ERR_SENSOR;
+            tank_data_valid = (uno_status == 0);
 
             ESP_LOGI(TAG,
                      "dist=%u mm  water=%u mm  level=%u%%  vol=%u L  uno_status=%u",
@@ -103,34 +191,71 @@ void app_main(void)
                      (unsigned)tank.level_pct,
                      (unsigned)tank.volume_l,
                      (unsigned)uno_status);
+
+            if (tank_data_valid)
+            {
+                last_valid_level = (int)tank.level_pct;
+                last_valid_volume_l = (int)tank.volume_l;
+                last_valid_distance_mm = (int)distance_mm;
+                have_last_level = true;
+                event_code = process_tank_alarms(last_valid_level);
+            }
         }
 
         apply_status_led(wifi_up, uno_ever_ok, uno_ok);
 
-        if (wifi_up)
+        TickType_t now = xTaskGetTickCount();
+        bool period_elapsed =
+            (last_blynk_tick == 0) ||
+            ((now - last_blynk_tick) >= pdMS_TO_TICKS(BLYNK_UPDATE_PERIOD_MS));
+        bool err_changed = (err_code != last_sent_err);
+        bool want_send =
+            period_elapsed ||
+            err_changed ||
+            (event_code != BLYNK_V7_NONE);
+        bool retry_ok = last_blynk_ok || period_elapsed;
+
+        if (wifi_up && want_send && retry_ok)
         {
-            bool level_changed =
-                have_last_level &&
-                ((int)tank.level_pct != last_sent_level);
-            bool first_ok =
-                uno_ok && !have_last_level;
-            bool err_changed = (err_code != last_sent_err);
+            int rssi = wifi_get_rssi();
+            uint32_t uptime_minutes =
+                (uint32_t)(esp_timer_get_time() / 1000000ULL / 60ULL);
+            int level_to_send =
+                have_last_level ? last_valid_level : 0;
+            int volume_to_send =
+                have_last_level ? last_valid_volume_l : 0;
+            int distance_to_send =
+                have_last_level ? last_valid_distance_mm : 0;
 
-            if (first_ok || (uno_ok && level_changed) || err_changed)
+            update_counter++;
+            last_blynk_tick = now;
+
+            if (blynk_send_status(
+                    level_to_send,
+                    err_code,
+                    volume_to_send,
+                    distance_to_send,
+                    rssi,
+                    update_counter,
+                    uptime_minutes,
+                    event_code) == ESP_OK)
             {
-                int level_to_send =
-                    uno_ok ? (int)tank.level_pct
-                           : (have_last_level ? last_sent_level : 0);
-
-                if (blynk_send_status(level_to_send, err_code) == ESP_OK)
+                last_blynk_ok = true;
+                last_sent_err = err_code;
+                if (event_code == BLYNK_V7_LOW_WATER)
                 {
-                    last_sent_level = level_to_send;
-                    last_sent_err = err_code;
-                    if (uno_ok)
-                    {
-                        have_last_level = true;
-                    }
+                    low_water_alarm_armed = false;
+                    low_water_logged_active = false;
                 }
+                else if (event_code == BLYNK_V7_FULL_TANK)
+                {
+                    full_tank_alarm_armed = false;
+                    full_tank_logged_active = false;
+                }
+            }
+            else
+            {
+                last_blynk_ok = false;
             }
         }
 

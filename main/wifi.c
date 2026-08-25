@@ -28,6 +28,23 @@ bool wifi_is_connected(void)
     return s_wifi_connected;
 }
 
+int wifi_get_rssi(void)
+{
+    wifi_ap_record_t ap_info;
+
+    if (!s_wifi_connected)
+    {
+        return 0;
+    }
+
+    if (esp_wifi_sta_get_ap_info(&ap_info) != ESP_OK)
+    {
+        return 0;
+    }
+
+    return ap_info.rssi;
+}
+
 
 static void event_handler(void *arg,
                           esp_event_base_t event_base,

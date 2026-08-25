@@ -89,15 +89,6 @@ static esp_err_t poll_uno(void)
     }
     last_ok = true;
 
-    ESP_LOGI(TAG,
-             "UNO dist=%u mm  level=%u%%  vol=%u L  status=%u  height=%u mm  cap=%u L",
-             (unsigned)regs[REG_DISTANCE_MM],
-             (unsigned)regs[REG_LEVEL_PCT],
-             (unsigned)regs[REG_VOLUME_L],
-             (unsigned)regs[REG_SENSOR_STATUS],
-             (unsigned)regs[REG_TANK_HEIGHT_MM],
-             (unsigned)regs[REG_TANK_CAPACITY_L]);
-
     return ESP_OK;
 }
 

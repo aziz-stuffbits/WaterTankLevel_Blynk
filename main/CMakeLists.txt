@@ -18,6 +18,7 @@ idf_component_register(
         esp_http_client
         esp-tls
         mbedtls
+        mqtt
         driver
         espressif__esp-modbus
 )
