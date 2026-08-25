@@ -26,13 +26,14 @@
 #define BLYNK_MQTT_CONNECT_WAIT_MS 10000
 
 #define BLYNK_STATUS_URL \
-    "https://blynk.cloud/external/api/update?token=%s&v0=%d&v1=%d&v2=%d&v3=%d&v4=%s&v5=%lu&v6=%lu&v7=%d"
+    "https://%s/external/api/update?token=%s&v0=%d&v1=%d&v2=%d&v3=%d&v4=%s&v5=%lu&v6=%lu&v7=%d"
 
 static const char *TAG = "BLYNK";
 
 static esp_mqtt_client_handle_t s_mqtt;
 static volatile bool s_mqtt_connected;
 static char s_mqtt_uri[96] = BLYNK_MQTT_URI;
+static char s_http_host[64] = "blynk.cloud";
 
 static bool token_is_set(void)
 {
@@ -47,6 +48,103 @@ static bool mqtt_topic_eq(const esp_mqtt_event_handle_t event, const char *topic
     return (event->topic != NULL) &&
            (event->topic_len == n) &&
            (memcmp(event->topic, topic, (size_t)n) == 0);
+}
+
+static void set_http_host_from_mqtt_uri(const char *uri)
+{
+    const char *host = strstr(uri, "://");
+    const char *end;
+    size_t n;
+
+    if (host == NULL)
+    {
+        return;
+    }
+
+    host += 3;
+    end = strpbrk(host, ":/");
+    if (end == NULL)
+    {
+        end = host + strlen(host);
+    }
+
+    n = (size_t)(end - host);
+    if ((n == 0) || (n >= sizeof(s_http_host)))
+    {
+        return;
+    }
+
+    memcpy(s_http_host, host, n);
+    s_http_host[n] = '\0';
+    ESP_LOGI(TAG, "HTTP API host %s", s_http_host);
+}
+
+static bool mqtt_publish_ds(const char *name, const char *payload)
+{
+    char topic[96];
+    int n = snprintf(topic, sizeof(topic), "ds/%s", name);
+
+    if ((s_mqtt == NULL) || (n <= 0) || (n >= (int)sizeof(topic)))
+    {
+        return false;
+    }
+
+    return esp_mqtt_client_publish(s_mqtt, topic, payload, 0, 1, 0) >= 0;
+}
+
+static bool mqtt_publish_ds_int(const char *name, int value)
+{
+    char payload[16];
+
+    snprintf(payload, sizeof(payload), "%d", value);
+    return mqtt_publish_ds(name, payload);
+}
+
+static bool mqtt_publish_ds_uint(const char *name, unsigned long value)
+{
+    char payload[16];
+
+    snprintf(payload, sizeof(payload), "%lu", value);
+    return mqtt_publish_ds(name, payload);
+}
+
+static esp_err_t mqtt_publish_status(int level,
+                                     int error_code,
+                                     int volume_l,
+                                     int distance_mm,
+                                     int rssi_send,
+                                     uint32_t update_counter,
+                                     uint32_t uptime_minutes,
+                                     int event_code)
+{
+    bool ok = true;
+
+    ok = mqtt_publish_ds_int(BLYNK_DS_LEVEL, level) && ok;
+    ok = mqtt_publish_ds_int("v0", level) && ok;
+    ok = mqtt_publish_ds_int(BLYNK_DS_STATUS, error_code) && ok;
+    ok = mqtt_publish_ds_int("v1", error_code) && ok;
+    ok = mqtt_publish_ds_int(BLYNK_DS_VOLUME, volume_l) && ok;
+    ok = mqtt_publish_ds_int("Water Volume", volume_l) && ok;
+    ok = mqtt_publish_ds_int("v2", volume_l) && ok;
+    ok = mqtt_publish_ds_int(BLYNK_DS_DISTANCE, distance_mm) && ok;
+    ok = mqtt_publish_ds_int("v3", distance_mm) && ok;
+    ok = mqtt_publish_ds_int(BLYNK_DS_RSSI, rssi_send) && ok;
+    ok = mqtt_publish_ds_int("v4", rssi_send) && ok;
+    ok = mqtt_publish_ds_uint(BLYNK_DS_COUNTER, (unsigned long)update_counter) && ok;
+    ok = mqtt_publish_ds_uint("v5", (unsigned long)update_counter) && ok;
+    ok = mqtt_publish_ds_uint(BLYNK_DS_UPTIME, (unsigned long)uptime_minutes) && ok;
+    ok = mqtt_publish_ds_uint("v6", (unsigned long)uptime_minutes) && ok;
+    ok = mqtt_publish_ds_int(BLYNK_DS_ALARM, event_code) && ok;
+    ok = mqtt_publish_ds_int("v7", event_code) && ok;
+
+    if (!ok)
+    {
+        ESP_LOGW(TAG, "One or more MQTT datastream publishes failed");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "MQTT datastreams published");
+    return ESP_OK;
 }
 
 static void apply_mqtt_redirect(esp_mqtt_client_handle_t client,
@@ -73,6 +171,7 @@ static void apply_mqtt_redirect(esp_mqtt_client_handle_t client,
     }
 
     ESP_LOGI(TAG, "MQTT redirect to %s", s_mqtt_uri);
+    set_http_host_from_mqtt_uri(s_mqtt_uri);
     s_mqtt_connected = false;
     esp_mqtt_client_set_uri(client, s_mqtt_uri);
     esp_mqtt_client_reconnect(client);
@@ -301,6 +400,7 @@ esp_err_t blynk_send_status(int level,
         url,
         sizeof(url),
         BLYNK_STATUS_URL,
+        s_http_host,
         BLYNK_TOKEN,
         level,
         error_code,
@@ -329,7 +429,27 @@ esp_err_t blynk_send_status(int level,
              event_code,
              s_mqtt_connected ? "online" : "offline");
 
+    esp_err_t mqtt_err = ESP_FAIL;
+    if (s_mqtt_connected)
+    {
+        mqtt_err = mqtt_publish_status(
+            level,
+            error_code,
+            volume_l,
+            distance_mm,
+            rssi_send,
+            update_counter,
+            uptime_minutes,
+            event_code
+        );
+    }
+
     esp_err_t err = blynk_http_get(url);
+    if ((err != ESP_OK) && (mqtt_err == ESP_OK))
+    {
+        err = ESP_OK;
+    }
+
     if (err == ESP_OK)
     {
         if (event_code == BLYNK_V7_LOW_WATER)
