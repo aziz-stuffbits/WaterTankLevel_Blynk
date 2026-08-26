@@ -9,6 +9,9 @@
 #define BLYNK_V7_LOW_WATER 1
 #define BLYNK_V7_FULL_TANK 2
 
+#define BLYNK_EVENT_LOW_WATER "water_level_low"
+#define BLYNK_EVENT_FULL_TANK "tank_overflow"
+
 /* MQTT topics use Datastream Name, not the pin. Must match the Blynk template. */
 #define BLYNK_DS_LEVEL "Tank Level"
 #define BLYNK_DS_VOLUME "Volume"

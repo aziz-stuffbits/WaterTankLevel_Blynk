@@ -131,6 +131,37 @@ static esp_err_t mqtt_publish_status(int level,
         return ESP_FAIL;
     }
 
+    if (event_code == BLYNK_V7_LOW_WATER)
+    {
+        if (esp_mqtt_client_publish(
+                s_mqtt,
+                "event/" BLYNK_EVENT_LOW_WATER,
+                NULL,
+                0,
+                1,
+                0) < 0)
+        {
+            ESP_LOGW(TAG, "MQTT low_water event publish failed");
+            return ESP_FAIL;
+        }
+        ESP_LOGI(TAG, "MQTT event published %s", BLYNK_EVENT_LOW_WATER);
+    }
+    else if (event_code == BLYNK_V7_FULL_TANK)
+    {
+        if (esp_mqtt_client_publish(
+                s_mqtt,
+                "event/" BLYNK_EVENT_FULL_TANK,
+                NULL,
+                0,
+                1,
+                0) < 0)
+        {
+            ESP_LOGW(TAG, "MQTT full_tank event publish failed");
+            return ESP_FAIL;
+        }
+        ESP_LOGI(TAG, "MQTT event published %s", BLYNK_EVENT_FULL_TANK);
+    }
+
     ESP_LOGI(TAG, "MQTT batch published");
     return ESP_OK;
 }
@@ -432,6 +463,26 @@ esp_err_t blynk_send_status(int level,
     if (err != ESP_OK)
     {
         err = blynk_http_get(url);
+        if ((err == ESP_OK) && (event_code != BLYNK_V7_NONE))
+        {
+            const char *code =
+                (event_code == BLYNK_V7_FULL_TANK) ?
+                    BLYNK_EVENT_FULL_TANK : BLYNK_EVENT_LOW_WATER;
+            char event_url[256];
+            int evn = snprintf(
+                event_url,
+                sizeof(event_url),
+                "https://%s/external/api/logEvent?token=%s&code=%s",
+                s_http_host,
+                BLYNK_TOKEN,
+                code
+            );
+
+            if ((evn > 0) && (evn < (int)sizeof(event_url)))
+            {
+                (void)blynk_http_get(event_url);
+            }
+        }
     }
 
     if (err == ESP_OK)

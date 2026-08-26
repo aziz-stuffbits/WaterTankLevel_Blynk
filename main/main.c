@@ -208,8 +208,10 @@ void app_main(void)
             ((now - last_blynk_tick) >= pdMS_TO_TICKS(BLYNK_UPDATE_PERIOD_MS));
         bool retry_ok = last_blynk_ok || period_elapsed;
         bool first_reading_ready = blynk_have_sent || have_last_level;
+        bool alarm_due = (event_code != BLYNK_V7_NONE);
 
-        if (wifi_up && period_elapsed && retry_ok && first_reading_ready)
+        if (wifi_up && (period_elapsed || alarm_due) && retry_ok &&
+            first_reading_ready)
         {
             int rssi = wifi_get_rssi();
             uint32_t uptime_minutes =
